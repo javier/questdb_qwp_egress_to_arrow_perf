@@ -1,0 +1,37 @@
+# Benchmark client image: the read clients + the source-built QuestDB 5.0 client
+# (QWP + Arrow egress), which is not on PyPI. docker compose builds this the first
+# time (the Rust compile takes a few minutes; it is cached until PYQDB_SHA changes).
+#
+# Once the QuestDB 5.0 client ships on PyPI this whole from-source stage collapses to
+# a single `pip install questdb==5.x` line and the Rust/git build below can be deleted.
+FROM python:3.12-slim
+
+# Build toolchain for the client's Rust FFI + Cython, and git for the checkout.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential git curl ca-certificates pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Rust toolchain (for the bundled c-questdb-client FFI).
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# --- QuestDB 5.0 client, hard-pinned to a commit for reproducibility --------------
+ARG PYQDB_REPO=https://github.com/questdb/py-questdb-client
+ARG PYQDB_SHA=deb3c21e39ffbf5008410379900c63450fdf1b1d
+RUN pip install --no-cache-dir -U pip "cython>=3.1.2" "setuptools>=80.9.0" numpy \
+    && git clone "$PYQDB_REPO" /opt/pyqdb \
+    && cd /opt/pyqdb \
+    && git checkout "$PYQDB_SHA" \
+    # Only the direct c-questdb-client submodule is needed to build the Rust FFI; do NOT
+    # recurse (that would drag in the whole QuestDB Java monorepo + its native submodules).
+    && git submodule update --init --depth 1 \
+    && QUESTDB_INSECURE_SKIP_VERIFY=1 pip install --no-cache-dir . --no-deps
+
+# --- Read clients + loader deps (clickhouse, adbc, connectorx, psycopg, arrow) -----
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Scripts + the vendored template are bind-mounted at run time (see docker-compose.yml),
+# so day-to-day edits don't require an image rebuild.
+WORKDIR /app
+RUN python -c "import questdb; assert hasattr(questdb, 'connect'), 'client build broken'; print('questdb', questdb.__version__)"

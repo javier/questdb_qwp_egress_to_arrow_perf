@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+# Local editor/agent settings — machine-specific paths, never commit.
+.claude/
+# All benchmark output stays local: per-run artifacts and the run log.
+results/
+RESULTS.md
+results_*.md
+# Local client build + venv from setup.sh
+.venv/
+.pyqdb_build/
+# AWS rig private key + provision marker — NEVER commit
+aws/*.pem
+aws/*.rig-created

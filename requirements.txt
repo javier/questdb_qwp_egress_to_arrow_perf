@@ -1,0 +1,18 @@
+# Read-client + loader dependencies for the egress benchmark.
+#
+# Install these into the SAME interpreter that has the source-built QuestDB 5.0
+# client, because read_bench_questdb.py / load_questdb.py import it (that client is
+# NOT on PyPI - see ./setup.sh, which builds it and installs this file for you).
+# Everything here is a normal wheel:
+#
+#   <your-venv>/bin/pip install -r requirements.txt
+clickhouse-connect          # ClickHouse HTTP + Arrow egress (read_bench_clickhouse.py --variant arrow)
+clickhouse-driver[numpy]    # ClickHouse native TCP (read_bench_clickhouse.py --variant native).
+                            # [numpy] pulls numpy+pandas, required by use_numpy=True (the
+                            # columnar native path). Without it: "Extras for NumPy must be installed".
+connectorx              # TimescaleDB partitioned Arrow read (read_bench_timescale.py --variant connectorx)
+adbc-driver-postgresql  # TimescaleDB Arrow-over-Postgres (read_bench_timescale.py --variant adbc)
+adbc-driver-manager
+psycopg[binary]         # TimescaleDB COPY loader + bounds queries
+polars                  # datagen + loaders
+pyarrow                 # Arrow accounting

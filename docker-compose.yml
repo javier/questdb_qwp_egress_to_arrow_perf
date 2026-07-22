@@ -1,0 +1,106 @@
+# Three engines, one box, for the egress (read-throughput) comparison.
+#
+# Port map (host side) - deliberately de-conflicted because ClickHouse's native
+# port and QuestDB's HTTP/QWP port both default to 9000:
+#
+#   QuestDB     9000  HTTP + QWP (read_bench_questdb.py talks ws:// here)
+#               8812  PGWire        9009  ILP/TCP
+#   ClickHouse  8123  HTTP (clickhouse-connect + Arrow)   9001  native TCP (clickhouse-driver)
+#   Timescale   5432  PostgreSQL (ADBC + connectorx + COPY loader)
+#
+# Data lives in named volumes; `docker compose down -v` wipes everything.
+services:
+  questdb:
+    image: questdb/questdb:nightly
+    container_name: egress_questdb
+    ports:
+      - "9000:9000"   # HTTP + QWP (WebSocket query egress)
+      - "8812:8812"   # PGWire
+      - "9009:9009"   # ILP/TCP
+    environment:
+      # Give ingestion and queries room; tune as needed for larger loads.
+      - QDB_SHARED_WORKER_COUNT=4
+    volumes:
+      - questdb_data:/var/lib/questdb
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/exec?query=select%201"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: egress_clickhouse
+    ports:
+      - "8123:8123"   # HTTP (Arrow egress via clickhouse-connect)
+      - "9001:9000"   # native TCP (clickhouse-driver) -> host 9001 to avoid QuestDB 9000
+    environment:
+      # Recent images reject the default user with an empty password (REQUIRED_PASSWORD).
+      - CLICKHOUSE_PASSWORD=bench
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    container_name: egress_timescale
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=bench
+      - POSTGRES_PASSWORD=bench
+      - POSTGRES_DB=bench
+    command:
+      # Read-throughput friendly: bigger shared_buffers + parallelism for seq scans.
+      - postgres
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - max_worker_processes=16
+      - -c
+      - max_parallel_workers=12
+      - -c
+      - max_parallel_workers_per_gather=8
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bench -d bench"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Benchmark client: builds the pinned QuestDB 5.0 client + read clients (see
+  # Dockerfile.client). Not started by `docker compose up` (profile 'client'); it is
+  # built once and invoked per step via `docker compose run --rm bench <cmd>`.
+  # Reaches the DBs by compose service name, so endpoints differ from the host ports.
+  bench:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    image: egress_bench:latest
+    container_name: egress_bench
+    profiles: ["client"]
+    environment:
+      - QDB_ADDR=questdb:9000
+      - CH_HOST=clickhouse
+      - CH_HTTP_PORT=8123
+      - CH_NATIVE_PORT=9000     # native port INSIDE the compose net (host maps it to 9001)
+      - CH_PASSWORD=bench
+      - TS_HOST=timescaledb
+      - TS_PORT=5432
+    volumes:
+      - .:/app                  # live scripts + vendored template + results/ + RESULTS.md
+    working_dir: /app
+
+volumes:
+  questdb_data:
+  clickhouse_data:
+  timescale_data:
