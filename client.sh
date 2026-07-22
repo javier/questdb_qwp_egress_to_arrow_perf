@@ -27,6 +27,8 @@
 #   VARIANTS — restrict which read paths run, e.g. VARIANTS=qwp-arrow,arrow,adbc for the
 #     streaming-only set (constant client memory; the buffering variants need a big-RAM
 #     client at high row counts).
+#   RUN_TIMEOUT — per-run cap in seconds passed to compare.py (default there is 180s).
+#     Raise it for large row counts or slow paths, or cells get marked TIMEOUT.
 #   PYTHON — host interpreter with the clients; if unset, uses the egress_bench image
 #     via `docker run` (build it first with `docker compose build bench`; use a
 #     reachable DB_HOST, not localhost, in docker mode).
@@ -68,6 +70,9 @@ case "$cmd" in
     readers="${4:-1,2,4,8}"
     engs="$engine"; [ "$engine" = "all" ] && engs="questdb,clickhouse,timescale"
     vflag=(); [ -n "${VARIANTS:-}" ] && vflag=(--variants "$VARIANTS")
+    # Raise this for big campaigns: one 500M adbc run at 1 reader takes ~250s, well past
+    # compare.py's 180s default, which would mark every such cell TIMEOUT.
+    [ -n "${RUN_TIMEOUT:-}" ] && vflag+=(--run-timeout "$RUN_TIMEOUT")
     echo "==> measuring '$engine' @ DB_HOST=$DB_HOST (limit=$rows, readers=$readers, warmup=$WARMUP, repeats=$REPEATS${VARIANTS:+, variants=$VARIANTS})"
     RUN compare.py --limit "$rows" --readers "$readers" --engines "$engs" \
         --warmup "$WARMUP" --repeats "$REPEATS" "${vflag[@]}" --out "results/run_${rows}_${engine}"

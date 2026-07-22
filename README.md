@@ -136,15 +136,23 @@ from the client over the real network, results scp'd back:
 cd aws
 ./provision.sh                 # key pair, SG, cluster placement group, 2 gp3-maxed boxes
 ./bootstrap.sh                 # push repo, install Docker, build the client image on the client
-./run.sh 50000000 1,2,4,8      # per-engine isolated: up -> load -> measure -> report -> scp back
+nohup ./campaign.sh 500000000 1,2,4,8 &   # unattended: runs DETACHED on the client box
 ./teardown.sh                  # terminate + delete everything by tag
 ```
 
-Results land in `results/aws/RESULTS.md`. See [`aws/README.md`](aws/README.md) for config
-(`EGB_*` — instance type, arch, disk), a by-hand walkthrough, and cost notes. **This is the
-regime where `--readers > 1` scales** — over a real network a single connection is
-round-trip-bound, so parallel readers multiply egress throughput (single-box localhost has
+`campaign.sh` launches the work on the client box itself, so it survives your laptop, the
+ssh session and the driver process — launch it and walk away. (`run.sh` does the same work
+attended, if you'd rather watch it.) Results land in `results/aws/RESULTS.md`.
+
+**This is the regime where `--readers > 1` scales** — over a real network a single connection
+is round-trip-bound, so parallel readers multiply egress throughput (single-box localhost has
 no RTT, so its curves stay flat).
+
+⚠️ **Size the box for the row count.** This only measures the egress path while the data fits
+in the DB host's page cache; past that you're measuring EBS, and the ranking changes for
+reasons unrelated to the protocol. Timescale sets the ceiling at ~124 B/row, so a 16 GB
+server tops out near 100M rows. `aws/README.md` has the sizing tables (RAM *and* NIC — a
+big-memory instance with a small pipe is a trap).
 
 For a single big box instead of the split rig, `./setup.sh` + `./bench.sh 50000000` works on
 any Docker host (`bench.sh` records the instance's vCPU/RAM in `RESULTS.md`); mind the RAM

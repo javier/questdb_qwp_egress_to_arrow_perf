@@ -33,7 +33,7 @@ for eng in $ENGINES; do
     echo "-- client: load $ROWS rows into $eng over the network"
     egb_ssh client "$R DB_HOST=$SERVER_PRIV ./client.sh load $eng $ROWS"
     echo "-- client: measure $eng (readers=$READERS warmup=$WARMUP repeats=$REPEATS${VARIANTS:+ variants=$VARIANTS})"
-    egb_ssh client "$R DB_HOST=$SERVER_PRIV WARMUP=$WARMUP REPEATS=$REPEATS VARIANTS='${VARIANTS:-}' ./client.sh measure $eng $ROWS $READERS"
+    egb_ssh client "$R DB_HOST=$SERVER_PRIV WARMUP=$WARMUP REPEATS=$REPEATS VARIANTS='${VARIANTS:-}' RUN_TIMEOUT='${RUN_TIMEOUT:-}' ./client.sh measure $eng $ROWS $READERS"
 done
 
 echo
