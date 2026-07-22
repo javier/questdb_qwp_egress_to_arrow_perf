@@ -141,20 +141,26 @@ def fmt(n):
     return f"{n:,.0f}" if n else "-"
 
 
+def fmt_gbytes(mb_per_s):
+    """MB/s -> GB/s. Reported in GIGABYTES/s because '6,974 MB/s' reads badly next to the
+    gigaBIT figures; multiply by 8 for Gb/s (so 7.0 GB/s == 55.8 Gb/s)."""
+    return f"{mb_per_s / 1000:,.2f}" if mb_per_s else "-"
+
+
 def build_cells(results):
-    """From a flat results list, return (rps_cells, mbps_cells, ordered_labels).
-    Failed cells (status != ok) render their status marker (TIMEOUT/ERR)."""
-    rps, mbps, labels = {}, {}, []
+    """From a flat results list, return (rps_cells, gbps_cells, ordered_labels).
+    Throughput cells are GB/s. Failed cells render their status marker (TIMEOUT/ERR)."""
+    rps, gbs, labels = {}, {}, []
     for res in results:
         lab = label_of(res)
         if lab not in labels:
             labels.append(lab)
         key = (lab, res["readers"])
         if res.get("status", "ok") == "ok":
-            rps[key], mbps[key] = fmt(res["rows_per_s"]), fmt(res["mb_per_s"])
+            rps[key], gbs[key] = fmt(res["rows_per_s"]), fmt_gbytes(res["mb_per_s"])
         else:
-            rps[key] = mbps[key] = res.get("status", "ERR")
-    return rps, mbps, labels
+            rps[key] = gbs[key] = res.get("status", "ERR")
+    return rps, gbs, labels
 
 
 def table(rows_hdr, cols, cells, unit):
@@ -231,14 +237,16 @@ def main(argv):
             results.append(res)
             spread = (res["rows_per_s_max"] - res["rows_per_s_min"]) / res["rows_per_s"] * 100 \
                 if res["rows_per_s"] else 0
-            print(f"       => mean {res['rows_per_s']:,.0f} rows/s | {res['mb_per_s']:,.1f} MB/s "
+            print(f"       => mean {res['rows_per_s']:,.0f} rows/s | "
+                  f"{res['mb_per_s'] / 1000:,.2f} GB/s ({res['gb_per_s']:.1f} Gb/s) "
                   f"(spread {spread:.1f}% over {res['repeats']} runs)", file=sys.stderr)
 
     method = (f"mean of {args.repeats} measured run(s) after {args.warmup} warmup(s) "
               f"+ {args.settle}s settle, per cell")
-    rps_cells, mbps_cells, labels = build_cells(results)
+    rps_cells, gbs_cells, labels = build_cells(results)
     rps_tbl = table(labels, reader_counts, rps_cells, "rows/s by reader count")
-    mbps_tbl = table(labels, reader_counts, mbps_cells, "MB/s (decoded payload; compare within-engine only)")
+    mbps_tbl = table(labels, reader_counts, gbs_cells,
+                     "GB/s decoded payload (x8 for Gb/s); compare within-engine only")
     md = (f"# Egress read benchmark\n\nlimit = {args.limit:,} rows per run — {method}\n\n"
           f"{rps_tbl}\n\n{mbps_tbl}\n")
     print("\n" + rps_tbl + "\n\n" + mbps_tbl + "\n")

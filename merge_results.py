@@ -44,12 +44,12 @@ def main(argv):
         return 1
 
     reader_counts = sorted({res["readers"] for res in results})
-    rps_cells, mbps_cells, labels = build_cells(results)
+    rps_cells, gbs_cells, labels = build_cells(results)
     ordered = [x for x in CANON if x in labels] + [x for x in labels if x not in CANON]
 
     rps_tbl = table(ordered, reader_counts, rps_cells, "rows/s by reader count")
-    mbps_tbl = table(ordered, reader_counts, mbps_cells,
-                     "MB/s (decoded payload; compare within-engine only)")
+    mbps_tbl = table(ordered, reader_counts, gbs_cells,
+                     "GB/s decoded payload (x8 for Gb/s); compare within-engine only")
 
     cpu, ram, plat = machine_info()
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")

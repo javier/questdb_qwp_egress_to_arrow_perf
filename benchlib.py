@@ -118,7 +118,7 @@ def emit_result(engine, variant, args, readers, total, tbytes, elapsed, counts):
     gib = tbytes / (1024 ** 3)
     print(f"[done]   {engine}/{variant}: {total:,} rows, {gib:.2f} GiB decoded in "
           f"{elapsed:.3f}s across {readers} reader(s)", file=sys.stderr)
-    print(f"[done]   {rate:,.0f} rows/s | {mbps:,.1f} MB/s | {gbps:.2f} Gb/s "
+    print(f"[done]   {rate:,.0f} rows/s | {mbps / 1000:,.2f} GB/s ({gbps:.1f} Gb/s) "
           f"(decoded columnar payload, not wire bytes)", file=sys.stderr)
     if readers > 1:
         per = "  ".join(f"r{i}={c:,}" for i, c in enumerate(counts))
@@ -132,5 +132,5 @@ def emit_result(engine, variant, args, readers, total, tbytes, elapsed, counts):
     if args.json:
         print("RESULT " + json.dumps(result))
     else:
-        print(f"[done]   {rate:,.0f} rows/s | {mbps:,.1f} MB/s")
+        print(f"[done]   {rate:,.0f} rows/s | {mbps / 1000:,.2f} GB/s")
     return result
