@@ -20,6 +20,7 @@ import platform
 import statistics
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -83,18 +84,28 @@ def run_one(script, variant, limit, readers, run_timeout):
     return None, tail
 
 
-def run_cell(script, variant, limit, readers, run_timeout, warmup, repeats, log):
-    """Warm the cell `warmup` times (discarded, lets the DB/OS page-cache heat up),
-    then measure `repeats` times and return the MEAN over the measured runs. Each run
-    is a fresh client process, but server-side buffer pools and the OS file cache
-    persist across them, so the warmups do their job. Fails fast: if any warmup or
-    measured run times out / errors, the cell is marked and the rest is skipped."""
+def run_cell(script, variant, limit, readers, run_timeout, warmup, repeats, log, settle=0):
+    """Warm the cell `warmup` times (discarded, lets the DB/OS page-cache heat up), pause
+    `settle` seconds, then measure `repeats` times and return the MEAN over the measured
+    runs. Each run is a fresh client process, but server-side buffer pools and the OS file
+    cache persist across them, so the warmups do their job.
+
+    The settle pause matters: warmups leave the server busy (background merges, WAL
+    flushing, dirty-page writeback), and without a gap that tail bleeds into the FIRST
+    measured run - observed as a low first sample and a 10-19% spread, while the remaining
+    samples agreed to <1%. Warmups fill the cache; settle lets the system go quiet.
+
+    Fails fast: if any warmup or measured run times out / errors, the cell is marked and
+    the rest is skipped."""
     for w in range(warmup):
         res, err = run_one(script, variant, limit, readers, run_timeout)
         log(f"warm {w + 1}/{warmup}: "
             + (f"{res['rows_per_s']:,.0f} rows/s" if res else f"FAILED {err}"))
         if res is None:
             return None, err
+    if settle > 0:
+        log(f"settle {settle}s before measuring")
+        time.sleep(settle)
     samples = []
     for m in range(repeats):
         res, err = run_one(script, variant, limit, readers, run_timeout)
@@ -117,6 +128,7 @@ def run_cell(script, variant, limit, readers, run_timeout, warmup, repeats, log)
         "elapsed_s": statistics.mean(s["elapsed_s"] for s in samples),
         "rows_per_s_min": min(rps), "rows_per_s_max": max(rps),
         "rows_per_s_samples": rps, "warmup": warmup, "repeats": len(samples),
+        "settle_s": settle,
     }, None
 
 
@@ -177,6 +189,10 @@ def main(argv):
                     help="unmeasured warmup runs per cell (heats the DB/OS page cache); default 2")
     ap.add_argument("--repeats", type=int, default=3,
                     help="measured runs per cell; the reported value is their mean; default 3")
+    ap.add_argument("--settle", type=int, default=10,
+                    help="seconds to pause between the warmups and the measured runs, so "
+                         "warmup-induced background work (merges, WAL flush, writeback) "
+                         "does not bleed into the first measured run; default 10")
     ap.add_argument("--append", default=None,
                     help="append this run's tables (with row count + machine info) as a "
                          "new dated section to this markdown file, e.g. RESULTS.md")
@@ -204,7 +220,8 @@ def main(argv):
                   f"(warmup={args.warmup}, measure={args.repeats}) ...", file=sys.stderr)
             res, err = run_cell(script, variant, args.limit, r, args.run_timeout,
                                 args.warmup, args.repeats,
-                                lambda m: print(f"       {m}", file=sys.stderr))
+                                lambda m: print(f"       {m}", file=sys.stderr),
+                                settle=args.settle)
             if res is None:
                 print(f"       FAILED: {err}", file=sys.stderr)
                 status = "TIMEOUT" if err and err.startswith("TIMEOUT") else "ERR"
@@ -217,7 +234,8 @@ def main(argv):
             print(f"       => mean {res['rows_per_s']:,.0f} rows/s | {res['mb_per_s']:,.1f} MB/s "
                   f"(spread {spread:.1f}% over {res['repeats']} runs)", file=sys.stderr)
 
-    method = f"mean of {args.repeats} measured run(s) after {args.warmup} warmup(s) per cell"
+    method = (f"mean of {args.repeats} measured run(s) after {args.warmup} warmup(s) "
+              f"+ {args.settle}s settle, per cell")
     rps_cells, mbps_cells, labels = build_cells(results)
     rps_tbl = table(labels, reader_counts, rps_cells, "rows/s by reader count")
     mbps_tbl = table(labels, reader_counts, mbps_cells, "MB/s (decoded payload; compare within-engine only)")

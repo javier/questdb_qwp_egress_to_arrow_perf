@@ -12,7 +12,10 @@
 #
 # Env:
 #   VARIANTS      restrict read paths, e.g. qwp-arrow,arrow,adbc (streaming only)
-#   WARMUP(1) REPEATS(3) RUN_TIMEOUT(3600)
+#   WARMUP(2) SETTLE(10) REPEATS(3) RUN_TIMEOUT(3600)
+#                 warm the cache, pause SETTLE seconds so warmup-induced background work
+#                 (merges, WAL flush, writeback) doesn't skew the first measured run, then
+#                 average REPEATS runs.
 #   SKIP_LOAD=1   measure only — data is already loaded (e.g. after an instance resize)
 #   ENGINES       default "questdb clickhouse timescale"
 #   DEADMAN_MIN   schedule an OS shutdown on both boxes after N minutes as a runaway-cost
@@ -65,10 +68,11 @@ if [ "$DEADMAN_MIN" != "0" ]; then
     say "dead-man armed at +${DEADMAN_MIN} min (stop = data preserved unless DEADMAN_TERMINATE=1)"
 fi
 
-# --- is a campaign already in flight? (idempotent — never launch twice) ----------------
+# --- is a campaign already IN FLIGHT? (idempotent — never launch two at once) ----------
+# Only a RUNNING campaign blocks a new launch. A leftover CAMPAIGN_DONE marker just means
+# a previous run finished; treating that as "skip" would silently no-op every later run.
 STATE=fresh
-if rssh "$CLIENT_PUB" "grep -q CAMPAIGN_DONE /tmp/campaign.log" 2>/dev/null; then STATE=done
-elif rssh "$CLIENT_PUB" "pgrep -f '[b]ox_campaign' > /dev/null" 2>/dev/null; then STATE=running; fi
+if rssh "$CLIENT_PUB" "pgrep -f '[b]ox_campaign' > /dev/null" 2>/dev/null; then STATE=running; fi
 say "detected state: $STATE"
 
 if [ "$STATE" = "fresh" ]; then
@@ -78,8 +82,8 @@ if [ "$STATE" = "fresh" ]; then
     say "code + rig key delivered"
 
     ENVS="SERVER_PRIV=$SERVER_PRIV ROWS=$ROWS READERS=$READERS"
-    ENVS="$ENVS VARIANTS='${VARIANTS:-}' WARMUP='${WARMUP:-1}' REPEATS='${REPEATS:-3}'"
-    ENVS="$ENVS RUN_TIMEOUT='${RUN_TIMEOUT:-3600}' SKIP_LOAD='${SKIP_LOAD:-0}'"
+    ENVS="$ENVS VARIANTS='${VARIANTS:-}' WARMUP='${WARMUP:-2}' REPEATS='${REPEATS:-3}'"
+    ENVS="$ENVS SETTLE='${SETTLE:-10}' RUN_TIMEOUT='${RUN_TIMEOUT:-3600}' SKIP_LOAD='${SKIP_LOAD:-0}'"
     [ -n "${ENGINES:-}" ] && ENVS="$ENVS ENGINES='$ENGINES'"
     rssh "$CLIENT_PUB" "rm -f /tmp/campaign.log; nohup env $ENVS bash ${EGB_REMOTE_DIR}/aws/box_campaign.sh > /tmp/campaign.log 2>&1 & echo launched" >>"$LOG" 2>&1
     say "campaign launched detached on client"

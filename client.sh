@@ -29,6 +29,8 @@
 #     client at high row counts).
 #   RUN_TIMEOUT — per-run cap in seconds passed to compare.py (default there is 180s).
 #     Raise it for large row counts or slow paths, or cells get marked TIMEOUT.
+#   SETTLE — seconds to pause between warmups and measured runs (compare.py default 10),
+#     so warmup-induced background work doesn't skew the first measured run.
 #   PYTHON — host interpreter with the clients; if unset, uses the egress_bench image
 #     via `docker run` (build it first with `docker compose build bench`; use a
 #     reachable DB_HOST, not localhost, in docker mode).
@@ -73,6 +75,7 @@ case "$cmd" in
     # Raise this for big campaigns: one 500M adbc run at 1 reader takes ~250s, well past
     # compare.py's 180s default, which would mark every such cell TIMEOUT.
     [ -n "${RUN_TIMEOUT:-}" ] && vflag+=(--run-timeout "$RUN_TIMEOUT")
+    [ -n "${SETTLE:-}" ] && vflag+=(--settle "$SETTLE")
     echo "==> measuring '$engine' @ DB_HOST=$DB_HOST (limit=$rows, readers=$readers, warmup=$WARMUP, repeats=$REPEATS${VARIANTS:+, variants=$VARIANTS})"
     RUN compare.py --limit "$rows" --readers "$readers" --engines "$engs" \
         --warmup "$WARMUP" --repeats "$REPEATS" "${vflag[@]}" --out "results/run_${rows}_${engine}"

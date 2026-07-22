@@ -78,6 +78,8 @@ for eng in $ENGINES; do
 
   echo "--> Measuring $eng (readers=$READERS, warmup=$WARMUP, repeats=$REPEATS) ..."
   VFLAG=(); [ -n "${VARIANTS:-}" ] && VFLAG=(--variants "$VARIANTS")
+  [ -n "${SETTLE:-}" ] && VFLAG+=(--settle "$SETTLE")
+  [ -n "${RUN_TIMEOUT:-}" ] && VFLAG+=(--run-timeout "$RUN_TIMEOUT")
   RUN compare.py --limit "$ROWS" --readers "$READERS" --engines "$eng" \
       --warmup "$WARMUP" --repeats "$REPEATS" "${VFLAG[@]}" --out "results/run_${ROWS}_${eng}"
 done

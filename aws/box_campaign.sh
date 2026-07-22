@@ -24,15 +24,18 @@ SSHS="ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o
 
 export DB_HOST="$SERVER_PRIV"
 export VARIANTS="${VARIANTS:-}"
-export WARMUP="${WARMUP:-1}"
+export WARMUP="${WARMUP:-2}"
 export REPEATS="${REPEATS:-3}"
+export SETTLE="${SETTLE:-10}"
 export RUN_TIMEOUT="${RUN_TIMEOUT:-3600}"
 
 cd "$REPO" || { echo "NO_REPO $REPO"; exit 1; }
-rm -f "results/run_${ROWS}"_*.json
+# Clear only the engines we are about to run, so a single-engine re-run (e.g. re-measuring
+# one engine with more warmup) composes with results already collected for the others.
+for e in $ENGINES; do rm -f "results/run_${ROWS}_${e}.json"; done
 
 echo "campaign: rows=$ROWS readers=$READERS engines='$ENGINES' variants='${VARIANTS:-all}'"
-echo "          warmup=$WARMUP repeats=$REPEATS run_timeout=$RUN_TIMEOUT skip_load=${SKIP_LOAD:-0}"
+echo "          warmup=$WARMUP settle=${SETTLE}s repeats=$REPEATS run_timeout=$RUN_TIMEOUT skip_load=${SKIP_LOAD:-0}"
 
 for eng in $ENGINES; do
     echo "==================== $eng ===================="
