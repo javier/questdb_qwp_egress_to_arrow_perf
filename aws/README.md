@@ -1,9 +1,14 @@
-# egress-bench on AWS (SSH-driven, same-AZ split)
+# Running the egress test on AWS (SSH-driven, same-AZ split)
 
-Automates the split benchmark end to end from your laptop: two EC2 boxes in **one AZ /
-cluster placement group** (lowest RTT), the **DB host** running the three databases and
-the **client host** running ingestion + the query benchmark and generating the report.
-Modeled on `c-questdb-client/doc/net_bench`, but over plain **SSH/scp** instead of SSM.
+Automates the split run end to end from your laptop: two EC2 boxes in **one AZ / cluster
+placement group** (lowest RTT), the **DB host** running the databases and the **client
+host** running ingestion + the read test and generating the report. Modeled on
+`c-questdb-client/doc/net_bench`, but over plain **SSH/scp** instead of SSM.
+
+Why bother with two boxes: on a single machine the client and server share a loopback with
+no round-trip latency, so extra reader connections buy nothing. Across a real network a
+single connection is round-trip-bound, and parallel readers actually multiply egress
+throughput — that only shows up on a rig like this.
 
 Only the **client** box builds the QuestDB 5.0 client image (the heavy step); the **DB**
 box just pulls prebuilt images. Ingestion runs *from the client over the network*, so the
@@ -94,7 +99,7 @@ scp -i $K ubuntu@<client-public>:/opt/egress_perf/RESULTS.md results/aws/
 | --- | --- | --- |
 | `provision.sh` | laptop | create key pair, SG, placement group, 2 instances (gp3 maxed) |
 | `bootstrap.sh` | laptop | push repo, install Docker, pull DB images (server), build client (client) |
-| `run.sh` | laptop | drive the full isolated split benchmark, scp `RESULTS.md` back |
+| `run.sh` | laptop | drive the full isolated split run, scp `RESULTS.md` back |
 | `teardown.sh` | laptop | terminate + delete everything by tag |
 | `box_bootstrap.sh` | either box | install Docker Engine + compose plugin |
 | `env.sh` / `lib.sh` | laptop | shared config + ssh/rsync helpers |

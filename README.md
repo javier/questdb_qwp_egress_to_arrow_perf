@@ -1,14 +1,20 @@
-# Egress (read-throughput) benchmark: QuestDB vs ClickHouse vs TimescaleDB
+# QWP egress to Arrow — a performance test
 
-The counterpart to the QuestDB `read_bench.py`: **how fast can Python pull N million
-rows of the same `trades` table out of each engine**, over the fastest columnar path
-each one offers, with a sweep over parallel reader connections.
+How fast can a Python client stream rows **out** of a time-series database and into
+Arrow? This exercises QuestDB's new **QWP** protocol (query egress over a WebSocket that
+hands back Arrow batches directly), with **ClickHouse** and **TimescaleDB** alongside it
+as reference points, each using the fastest columnar read path it offers.
+
+**This is not a benchmark.** Nothing is tuned for peak: the engines run on sensible
+defaults, on whatever box you point it at. It measures one specific thing — the *client
+egress path*: how quickly rows cross the wire and materialise as Arrow in a Python
+process, and how that scales as you add parallel connections. Treat the numbers as a
+directional comparison of read paths, not as engine rankings.
 
 All three databases hold a byte-identical `trades` dataset (`symbol`, `side`, `price`,
 `amount`, `timestamp`), generated once by `datagen.py`, so the comparison is like for
-like. Each `read_bench_*.py` splits the last-N-row timestamp range into `--readers`
-equal slices (one connection each) and tallies rows + decoded Arrow bytes, exactly like
-the original QuestDB script.
+like. Each reader splits the last-N-row timestamp range into `--readers` equal slices
+(one connection each) and tallies rows plus decoded Arrow bytes.
 
 ## Fastest paths measured
 
@@ -20,8 +26,10 @@ the original QuestDB script.
 | TimescaleDB | `adbc` | ADBC PostgreSQL driver, `fetch_record_batch()` (Arrow over binary COPY) |
 | TimescaleDB | `connectorx` | `connectorx` Rust reader, `partition_on` splits into N connections internally |
 
-The two variants per non-QuestDB engine are the "both, compare them" ask: HTTP-Arrow vs
-native-TCP for ClickHouse; manual-split ADBC vs self-partitioning connectorx for Timescale.
+The non-QuestDB engines get two variants each, because the obvious "fastest path" isn't
+obvious: HTTP-Arrow vs native-TCP for ClickHouse, and manual-split ADBC vs
+self-partitioning connectorx for Timescale. Which one wins changes with the row count and
+with whether the client is local or across a network.
 
 ## Prerequisites
 
@@ -106,7 +114,7 @@ combined, machine-tagged section of `RESULTS.md`. This is the regime where **par
 actually scale** — a single connection is network-round-trip-bound, so `--readers` past 1 buys
 real throughput (unlike single-box localhost, where the curves stay flat).
 
-Run any single benchmark directly for live per-tick output:
+Run any single read path directly for live per-tick output:
 
 ```bash
 PY=${PYTHON:-./.venv/bin/python}
@@ -120,7 +128,7 @@ $PY read_bench_timescale.py  --variant connectorx --limit 50000000 --readers 4
 ## Running on AWS — fully automated
 
 [`aws/`](aws/) is an SSH-driven rig (modeled on `c-questdb-client/doc/net_bench`) that does
-the whole split benchmark from your laptop: two same-AZ EC2 boxes (DB host + client host),
+the whole split run from your laptop: two same-AZ EC2 boxes (DB host + client host),
 **gp3 maxed to 16000 IOPS / 1000 MiB/s** so disk isn't the bottleneck, ingestion + queries
 from the client over the real network, results scp'd back:
 
@@ -147,7 +155,7 @@ any Docker host (`bench.sh` records the instance's vCPU/RAM in `RESULTS.md`); mi
 `datagen.py` stamps row `i` at `T0 + i*delta` over a fixed 30-day window (microsecond
 resolution, the common precision floor - Postgres is microsecond). Two reasons:
 
-- **Balanced reader split.** The benchmarks divide the min→max timestamp range into N
+- **Balanced reader split.** The readers divide the min→max timestamp range into N
   equal slices. That is only fair if rows are spread uniformly in time; then each slice
   holds ~the same row count (you'll see `r0=... r1=...` come out even).
 - **Identical data everywhere.** One generator feeds all three loaders, so byte counts
@@ -243,7 +251,7 @@ merge_results.py            stitch per-engine result JSONs -> combined RESULTS.m
 aws/                        SSH-driven AWS rig: provision | bootstrap | run | teardown (see aws/README.md)
 ```
 
-Benchmark output (`RESULTS.md`, `results/`) is generated at run time and gitignored — this
+Measurement output (`RESULTS.md`, `results/`) is generated at run time and gitignored — this
 repo ships the harness, not numbers.
 
 All endpoints are env-configurable (`QDB_ADDR`, `CH_HOST`/`CH_HTTP_PORT`/`CH_NATIVE_PORT`,
