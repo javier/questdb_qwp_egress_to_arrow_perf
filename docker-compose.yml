@@ -17,9 +17,10 @@ services:
       - "9000:9000"   # HTTP + QWP (WebSocket query egress)
       - "8812:8812"   # PGWire
       - "9009:9009"   # ILP/TCP
-    environment:
-      # Give ingestion and queries room; tune as needed for larger loads.
-      - QDB_SHARED_WORKER_COUNT=4
+    # No tuning: QuestDB runs on its own defaults, so the shared worker pool sizes
+    # itself from the host's CPU count. Set QDB_SHARED_WORKER_COUNT here only if you
+    # deliberately want to pin it, and note that pinning it low on a big box will
+    # cap query parallelism.
     volumes:
       - questdb_data:/var/lib/questdb
     healthcheck:
