@@ -36,6 +36,9 @@ def build_conf(args):
 def main(argv):
     ap = benchlib.common_args("QuestDB QWP Arrow egress read benchmark")
     ap.add_argument("--addr", default=os.environ.get("QDB_ADDR", "localhost:9000"))
+    ap.add_argument("--slice", default=None, metavar="i/N",
+                    help="measure ONLY slice i of N (0-based) with a single connection, so N "
+                         "independent PROCESSES can be run instead of N threads")
     ap.add_argument("--token", default=None)
     ap.add_argument("--username", default=None)
     ap.add_argument("--password", default=None)
@@ -46,16 +49,31 @@ def main(argv):
     conf = build_conf(args)
     ts, table, limit, readers = args.timestamp_col, args.table, args.limit, args.readers
 
-    with questdb.connect(conf) as db:
-        mm = db.query(f"select min({ts}) lo, max({ts}) hi "
-                      f"from (select {ts} from {table} limit -{limit})").to_polars()
-    if mm.height == 0 or mm["lo"][0] is None:
-        print(f"[error] '{table}' returned no rows", file=sys.stderr)
-        return 1
-    lo = mm["lo"].dt.epoch("us")[0]
-    hi = mm["hi"].dt.epoch("us")[0]
+    if args.bounds:
+        lo, hi = (int(x) for x in args.bounds.split(","))
+    else:
+        with questdb.connect(conf) as db:
+            mm = db.query(f"select min({ts}) lo, max({ts}) hi "
+                          f"from (select {ts} from {table} limit -{limit})").to_polars()
+        if mm.height == 0 or mm["lo"][0] is None:
+            print(f"[error] '{table}' returned no rows", file=sys.stderr)
+            return 1
+        lo = mm["lo"].dt.epoch("us")[0]
+        hi = mm["hi"].dt.epoch("us")[0]
+    if args.emit_bounds:
+        print(f"BOUNDS {lo} {hi}")
+        return 0
 
-    slices = list(benchlib.slice_bounds(lo, hi, readers))
+    if args.slice:
+        idx, total = (int(x) for x in args.slice.split("/"))
+        all_slices = list(benchlib.slice_bounds(lo, hi, total))
+        if not 0 <= idx < total:
+            print(f"[error] --slice index {idx} out of range for {total}", file=sys.stderr)
+            return 2
+        slices = [all_slices[idx]]      # this process handles exactly one slice
+        readers = 1
+    else:
+        slices = list(benchlib.slice_bounds(lo, hi, readers))
     counts, byts, errors = [0] * readers, [0] * readers, []
 
     def reader_fn(idx):

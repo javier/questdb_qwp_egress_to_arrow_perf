@@ -42,13 +42,22 @@ def machine_info():
             ram = 0
     return cpu, ram, platform.platform()
 
-# (engine, script, variant) - variant None means the script has no --variant flag.
+# (engine, script, variant, mode) - variant None means the script has no --variant flag.
+#
+# `mode` is how the N readers are run, and it is NOT cosmetic:
+#   thread  - N threads in one interpreter. Correct for clients that decode in native code
+#             and release the GIL (QuestDB QWP/Arrow, ClickHouse ArrowStream, ADBC). Measured
+#             identical to processes for those (1.00-1.01x) with less overhead.
+#   process - N independent processes, one timestamp slice each (via proc_compare.py).
+#             REQUIRED for clickhouse/native: clickhouse-driver materialises numpy in Python
+#             while holding the GIL, so threads serialise it. Measured 27.1M rows/s on 8
+#             threads vs 141.9M on 8 processes - running it threaded understates it 5.2x.
 TARGETS = [
-    ("questdb", "read_bench_questdb.py", None),
-    ("clickhouse", "read_bench_clickhouse.py", "arrow"),
-    ("clickhouse", "read_bench_clickhouse.py", "native"),
-    ("timescale", "read_bench_timescale.py", "adbc"),
-    ("timescale", "read_bench_timescale.py", "connectorx"),
+    ("questdb", "read_bench_questdb.py", None, "thread"),
+    ("clickhouse", "read_bench_clickhouse.py", "arrow", "thread"),
+    ("clickhouse", "read_bench_clickhouse.py", "native", "process"),
+    ("timescale", "read_bench_timescale.py", "adbc", "thread"),
+    ("timescale", "read_bench_timescale.py", "connectorx", "thread"),
 ]
 
 # Variants that STREAM the result (constant client memory). The others
@@ -130,6 +139,27 @@ def run_cell(script, variant, limit, readers, run_timeout, warmup, repeats, log,
         "rows_per_s_samples": rps, "warmup": warmup, "repeats": len(samples),
         "settle_s": settle,
     }, None
+
+
+def run_process_variant(engine, variant, args, reader_counts):
+    """Delegate a whole variant to proc_compare.py, which sweeps the reader counts using
+    independent processes. Returns its result dicts (already schema-compatible)."""
+    cmd = [PY, os.path.join(HERE, "proc_compare.py"), "--engine", engine,
+           "--limit", str(args.limit), "--readers", ",".join(str(r) for r in reader_counts),
+           "--warmup", str(args.warmup), "--settle", str(args.settle),
+           "--repeats", str(args.repeats), "--run-timeout", str(args.run_timeout),
+           "--warmup-scope", "run"]
+    if variant:
+        cmd += ["--variant", variant]
+    proc = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True)
+    sys.stderr.write(proc.stderr)
+    for line in proc.stdout.splitlines():
+        if line.startswith("RESULTS "):
+            return json.loads(line[len("RESULTS "):])
+    tail = (proc.stderr.strip().splitlines() or ["no RESULTS line"])[-1]
+    print(f"[error] process-mode run failed for {engine}/{variant}: {tail}", file=sys.stderr)
+    return [{"engine": engine, "variant": variant, "readers": r, "status": "ERR",
+             "rows_per_s": None, "mb_per_s": None} for r in reader_counts]
 
 
 def label_of(res):
@@ -218,9 +248,30 @@ def main(argv):
         print("[error] no targets selected (check --engines / --variants)", file=sys.stderr)
         return 2
 
+    out_dir = os.path.dirname(args.out)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
     results = []
-    for engine, script, variant in targets:
+
+    def flush():
+        """Persist after every cell. compare.py used to write only at the very end, so an
+        interrupted run threw away every completed cell - which cost us a whole engine's
+        results more than once."""
+        with open(args.out + ".json", "w") as fh:
+            json.dump(results, fh, indent=2)
+
+    for engine, script, variant, mode in targets:
         label = engine if variant is None else f"{engine}/{variant}"
+
+        if mode == "process":
+            print(f"[cell] {label:<22} readers={args.readers} limit={args.limit:,} "
+                  f"-> PROCESS mode (this client holds the GIL; threads would understate it)",
+                  file=sys.stderr)
+            results.extend(run_process_variant(engine, variant, args, reader_counts))
+            flush()
+            continue
+
         for r in reader_counts:
             print(f"[cell] {label:<22} readers={r} limit={args.limit:,} "
                   f"(warmup={args.warmup}, measure={args.repeats}) ...", file=sys.stderr)
@@ -233,8 +284,11 @@ def main(argv):
                 status = "TIMEOUT" if err and err.startswith("TIMEOUT") else "ERR"
                 results.append({"engine": engine, "variant": variant, "readers": r,
                                 "status": status, "rows_per_s": None, "mb_per_s": None})
+                flush()
                 continue
+            res["mode"] = "thread"
             results.append(res)
+            flush()
             spread = (res["rows_per_s_max"] - res["rows_per_s_min"]) / res["rows_per_s"] * 100 \
                 if res["rows_per_s"] else 0
             print(f"       => mean {res['rows_per_s']:,.0f} rows/s | "
@@ -251,11 +305,7 @@ def main(argv):
           f"{rps_tbl}\n\n{mbps_tbl}\n")
     print("\n" + rps_tbl + "\n\n" + mbps_tbl + "\n")
 
-    out_dir = os.path.dirname(args.out)
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-    with open(args.out + ".json", "w") as fh:
-        json.dump(results, fh, indent=2)
+    flush()   # final state (incremental flushes already ran after every cell)
     with open(args.out + ".md", "w") as fh:
         fh.write(md)
     saved = f"{args.out}.json  {args.out}.md"

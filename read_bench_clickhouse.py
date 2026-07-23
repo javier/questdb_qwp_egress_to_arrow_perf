@@ -97,6 +97,11 @@ def make_native_reader(args, slices, counts, byts):
 def main(argv):
     ap = benchlib.common_args("ClickHouse egress read benchmark")
     ap.add_argument("--variant", choices=["arrow", "native"], default="arrow")
+    ap.add_argument("--slice", default=None, metavar="i/N",
+                    help="measure ONLY slice i of N (0-based) with a single connection. "
+                         "Lets you run N independent PROCESSES instead of N threads, which "
+                         "sidesteps the GIL for client paths that hold it while decoding "
+                         "(the native/numpy path does; the Arrow path does not).")
     ap.add_argument("--host", default=os.environ.get("CH_HOST", "localhost"))
     ap.add_argument("--http-port", type=int, default=int(os.environ.get("CH_HTTP_PORT", "8123")))
     ap.add_argument("--native-port", type=int, default=int(os.environ.get("CH_NATIVE_PORT", "9001")))
@@ -105,13 +110,28 @@ def main(argv):
     ap.add_argument("--database", default="default")
     args = ap.parse_args(argv)
 
-    bounds = get_bounds(args)
-    if bounds is None:
-        print(f"[error] '{args.table}' returned no rows", file=sys.stderr)
-        return 1
-    lo, hi = bounds
-    readers = args.readers
-    slices = list(benchlib.slice_bounds(lo, hi, readers))
+    if args.bounds:
+        lo, hi = (int(x) for x in args.bounds.split(","))
+    else:
+        bounds = get_bounds(args)
+        if bounds is None:
+            print(f"[error] '{args.table}' returned no rows", file=sys.stderr)
+            return 1
+        lo, hi = bounds
+    if args.emit_bounds:
+        print(f"BOUNDS {lo} {hi}")
+        return 0
+    if args.slice:
+        idx, total = (int(x) for x in args.slice.split("/"))
+        all_slices = list(benchlib.slice_bounds(lo, hi, total))
+        if not 0 <= idx < total:
+            print(f"[error] --slice index {idx} out of range for {total}", file=sys.stderr)
+            return 2
+        slices = [all_slices[idx]]      # this process handles exactly one slice
+        readers = 1
+    else:
+        readers = args.readers
+        slices = list(benchlib.slice_bounds(lo, hi, readers))
     counts, byts, errors = [0] * readers, [0] * readers, []
 
     if args.variant == "arrow":

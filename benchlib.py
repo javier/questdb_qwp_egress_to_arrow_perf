@@ -68,6 +68,13 @@ def common_args(description, default_limit=10_000_000):
                     help="seconds between progress lines; default 0.5")
     ap.add_argument("--json", action="store_true",
                     help="emit one machine-readable JSON result line on stdout (for compare.py)")
+    ap.add_argument("--bounds", default=None, metavar="LO,HI",
+                    help="skip the min/max bounds query and use these epoch-microsecond "
+                         "bounds. Essential for a multi-PROCESS runner: otherwise every "
+                         "process repeats the same full-range scan concurrently, and those "
+                         "scans compete with the measured reads and wreck the numbers.")
+    ap.add_argument("--emit-bounds", action="store_true",
+                    help="print 'BOUNDS lo hi' for the selected row range, then exit")
     return ap
 
 

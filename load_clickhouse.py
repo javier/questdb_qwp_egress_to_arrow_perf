@@ -69,6 +69,15 @@ def main(argv):
 
     el = time.monotonic() - t0
     print(f"[done]   loaded {done:,} rows in {el:.1f}s ({done/el:,.0f} rows/s)")
+
+    # Verify against the server, not the sender's own tally: an interrupted load still
+    # reports what it sent, and every later measurement then runs on a short table.
+    actual = int(client.command(f"SELECT count() FROM {args.table}"))
+    if actual != args.rows:
+        print(f"[ERROR]  row count mismatch: expected {args.rows:,}, table has {actual:,} "
+              f"({args.rows - actual:+,}). The load did not complete.", file=sys.stderr)
+        return 1
+    print(f"[verify] row count OK: {actual:,}")
     return 0
 
 

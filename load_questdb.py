@@ -79,6 +79,23 @@ def main(argv):
 
     el = time.monotonic() - t0
     print(f"[done]   loaded {done:,} rows in {el:.1f}s ({done/el:,.0f} rows/s)")
+
+    # Verify what actually landed. Never trust the sender's own count: a load killed midway
+    # still reports the rows it sent, and every later measurement silently runs on a short
+    # table. Reconnect first so the sender has flushed, then poll - QuestDB's WAL applies
+    # asynchronously, so the count can lag a moment behind ingestion.
+    actual = -1
+    with questdb.connect(conf) as db:
+        for _ in range(60):
+            actual = int(db.query(f"select count() c from {args.table}").to_polars()["c"][0])
+            if actual >= args.rows:
+                break
+            time.sleep(1)
+    if actual != args.rows:
+        print(f"[ERROR]  row count mismatch: expected {args.rows:,}, table has {actual:,} "
+              f"({args.rows - actual:+,}). The load did not complete.", file=sys.stderr)
+        return 1
+    print(f"[verify] row count OK: {actual:,}")
     return 0
 
 

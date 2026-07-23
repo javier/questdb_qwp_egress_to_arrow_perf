@@ -138,11 +138,17 @@ def main(argv):
     ap.add_argument("--dbname", default=os.environ.get("TS_DBNAME", "bench"))
     args = ap.parse_args(argv)
 
-    bounds = get_bounds(args)
-    if bounds is None:
-        print(f"[error] '{args.table}' returned no rows", file=sys.stderr)
-        return 1
-    lo, hi = bounds
+    if args.bounds:
+        lo, hi = (int(x) for x in args.bounds.split(","))
+    else:
+        bounds = get_bounds(args)
+        if bounds is None:
+            print(f"[error] '{args.table}' returned no rows", file=sys.stderr)
+            return 1
+        lo, hi = bounds
+    if args.emit_bounds:
+        print(f"BOUNDS {lo} {hi}")
+        return 0
 
     print(f"[scan]   timescale/{args.variant}: last {args.limit:,} rows of "
           f"'{args.table}', {args.readers} reader(s)", file=sys.stderr)

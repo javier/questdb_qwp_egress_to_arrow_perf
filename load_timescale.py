@@ -68,8 +68,18 @@ def main(argv):
             el = time.monotonic() - t0
             print(f"[load]   {done:,}/{args.rows:,} rows | {done/el:,.0f} rows/s", file=sys.stderr)
 
+        # Verify against the server, not the sender's own tally. This loader COPYs in
+        # autocommit batches, so an interrupted run leaves a partial table that still looks
+        # healthy - exactly how a 500M load once silently became 458M.
+        actual = conn.execute(f"SELECT count(*) FROM {args.table}").fetchone()[0]
+
     el = time.monotonic() - t0
     print(f"[done]   loaded {done:,} rows in {el:.1f}s ({done/el:,.0f} rows/s)")
+    if actual != args.rows:
+        print(f"[ERROR]  row count mismatch: expected {args.rows:,}, table has {actual:,} "
+              f"({args.rows - actual:+,}). The load did not complete.", file=sys.stderr)
+        return 1
+    print(f"[verify] row count OK: {actual:,}")
     return 0
 
 
