@@ -134,6 +134,8 @@ def run_cell(script, variant, limit, readers, run_timeout, warmup, repeats, log,
         "rows": base["rows"], "limit": limit, "status": "ok",
         "rows_per_s": statistics.mean(rps),          # <- reported value (mean of measured)
         "mb_per_s": statistics.mean(mbps),
+        # Same derivation proc_compare.py uses, so both modes emit the same keys.
+        "gb_per_s": statistics.mean(mbps) * 8 / 1000,
         "elapsed_s": statistics.mean(s["elapsed_s"] for s in samples),
         "rows_per_s_min": min(rps), "rows_per_s_max": max(rps),
         "rows_per_s_samples": rps, "warmup": warmup, "repeats": len(samples),
