@@ -32,6 +32,11 @@ EGB_PREFIX="egress-bench"
 #   more RAM:        EGB_INSTANCE_TYPE=r7i.2xlarge   (64 GB)
 #   more bandwidth:  EGB_INSTANCE_TYPE=c7gn.4xlarge  (up to 50 Gbps; set EGB_ARCH=arm64)
 EGB_INSTANCE_TYPE="${EGB_INSTANCE_TYPE:-c8gn.2xlarge}"   # Graviton4, network-optimized (arm64)
+# The two boxes want different things: the DB host needs RAM (the working set must stay
+# page-cache resident or you measure the disk), the client mostly needs cores and NIC.
+# Override either independently; both default to EGB_INSTANCE_TYPE.
+EGB_SERVER_INSTANCE_TYPE="${EGB_SERVER_INSTANCE_TYPE:-$EGB_INSTANCE_TYPE}"
+EGB_CLIENT_INSTANCE_TYPE="${EGB_CLIENT_INSTANCE_TYPE:-$EGB_INSTANCE_TYPE}"
 EGB_ARCH="${EGB_ARCH:-arm64}"                     # x86_64 | arm64 (match the instance family)
 
 # Root EBS. gp3, MAXED OUT so disk is never the bottleneck (esp. server-side reads:

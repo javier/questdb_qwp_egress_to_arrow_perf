@@ -21,19 +21,22 @@ VPC_ID=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true \
     --query 'Vpcs[0].VpcId' --output text)
 [ "$VPC_ID" != "None" ] || { echo "ERROR: no default VPC in $AWS_REGION" >&2; exit 1; }
 
-echo "== pick an AZ offering $EGB_INSTANCE_TYPE (both boxes go in ONE AZ for low RTT)"
-OFFERED=$(aws ec2 describe-instance-type-offerings --location-type availability-zone \
-    --filters "Name=instance-type,Values=${EGB_INSTANCE_TYPE}" \
-    --query 'InstanceTypeOfferings[].Location' --output text)
+echo "== find AZs offering BOTH box types (both boxes go in ONE AZ for low RTT)"
+echo "   server=$EGB_SERVER_INSTANCE_TYPE  client=$EGB_CLIENT_INSTANCE_TYPE"
+az_list() {  # AZs offering instance type $1
+    aws ec2 describe-instance-type-offerings --location-type availability-zone \
+        --filters "Name=instance-type,Values=$1" \
+        --query 'InstanceTypeOfferings[].Location' --output text | tr '\t' '\n' | sort -u
+}
+if [ -n "${EGB_AZ:-}" ]; then
+    CANDIDATE_AZS="$EGB_AZ"                       # pin an AZ explicitly if you want one
+else
+    CANDIDATE_AZS=$(comm -12 <(az_list "$EGB_SERVER_INSTANCE_TYPE") \
+                             <(az_list "$EGB_CLIENT_INSTANCE_TYPE"))
+fi
+[ -n "$CANDIDATE_AZS" ] || { echo "ERROR: no AZ offers both instance types" >&2; exit 1; }
+echo "   candidates: $(echo $CANDIDATE_AZS)"
 SUBNET_ID=""; AZ=""
-for az in $OFFERED; do
-    sn=$(aws ec2 describe-subnets \
-        --filters "Name=vpc-id,Values=$VPC_ID" "Name=availability-zone,Values=$az" \
-        --query 'Subnets[0].SubnetId' --output text)
-    if [ "$sn" != "None" ] && [ -n "$sn" ]; then SUBNET_ID=$sn; AZ=$az; break; fi
-done
-[ -n "$SUBNET_ID" ] || { echo "ERROR: no default subnet in an AZ offering ${EGB_INSTANCE_TYPE}" >&2; exit 1; }
-echo "   AZ=$AZ subnet=$SUBNET_ID"
 
 echo "== key pair '$EGB_KEY_NAME'"
 if aws ec2 describe-key-pairs --key-names "$EGB_KEY_NAME" >/dev/null 2>&1; then
@@ -52,15 +55,27 @@ else
 fi
 
 echo "== security group (SSH from your laptop + all traffic intra-group)"
+# Reuse rather than abort: a provisioning run that dies partway (capacity, a network
+# blip) leaves this behind, and refusing to start again because of our own debris is
+# a bad failure mode. Rules are re-applied every time, which also picks up a changed
+# laptop IP; duplicates are expected and ignored.
+SG_ID=$(aws ec2 describe-security-groups \
+    --filters "Name=group-name,Values=$SG_NAME" "Name=vpc-id,Values=$VPC_ID" \
+    --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+if [ -n "$SG_ID" ] && [ "$SG_ID" != "None" ]; then
+    echo "   reusing existing $SG_NAME ($SG_ID)"
+else
+    SG_ID=$(aws ec2 create-security-group --group-name "$SG_NAME" \
+        --description "egress-bench: SSH from laptop, all traffic intra-group" \
+        --vpc-id "$VPC_ID" --tag-specifications "$(egb_tagspec security-group)" \
+        --query GroupId --output text)
+fi
 MY_IP=$(curl -fsS https://checkip.amazonaws.com)
-SG_ID=$(aws ec2 create-security-group --group-name "$SG_NAME" \
-    --description "egress-bench: SSH from laptop, all traffic intra-group" \
-    --vpc-id "$VPC_ID" --tag-specifications "$(egb_tagspec security-group)" \
-    --query GroupId --output text)
 aws ec2 authorize-security-group-ingress --group-id "$SG_ID" \
-    --protocol tcp --port 22 --cidr "${MY_IP}/32" >/dev/null
+    --protocol tcp --port 22 --cidr "${MY_IP}/32" >/dev/null 2>&1 || true
 aws ec2 authorize-security-group-ingress --group-id "$SG_ID" \
-    --protocol -1 --source-group "$SG_ID" >/dev/null
+    --protocol -1 --source-group "$SG_ID" >/dev/null 2>&1 || true
+echo "   ssh allowed from ${MY_IP}/32"
 
 echo "== cluster placement group (both boxes co-located for lowest RTT)"
 aws ec2 create-placement-group --group-name "$PG_NAME" --strategy cluster \
@@ -71,8 +86,10 @@ AMI=$(aws ssm get-parameter --name "$EGB_UBUNTU_SSM_PARAM" --query Parameter.Val
 echo "   $AMI"
 
 launch() {  # $1 = role
+    local itype="$EGB_SERVER_INSTANCE_TYPE"
+    [ "$1" = "client" ] && itype="$EGB_CLIENT_INSTANCE_TYPE"
     aws ec2 run-instances \
-        --image-id "$AMI" --instance-type "$EGB_INSTANCE_TYPE" \
+        --image-id "$AMI" --instance-type "$itype" \
         --key-name "$EGB_KEY_NAME" \
         --subnet-id "$SUBNET_ID" --security-group-ids "$SG_ID" \
         --associate-public-ip-address \
@@ -86,9 +103,34 @@ launch() {  # $1 = role
 }
 
 echo "== launch server + client (gp3 ${EGB_ROOT_GB}GB @ ${EGB_EBS_IOPS} IOPS / ${EGB_EBS_THROUGHPUT} MiB/s)"
-SERVER_ID=$(launch server)
-CLIENT_ID=$(launch client)
-echo "   server=$SERVER_ID client=$CLIENT_ID"
+# An AZ can OFFER a type and still have no capacity right now, and the failure usually
+# lands on the second instance. Launching both without cleaning up in between leaks a
+# running instance that bills until someone notices, so on failure we tear the partial
+# rig down and try the next AZ.
+SERVER_ID=""; CLIENT_ID=""
+for az in $CANDIDATE_AZS; do
+    sn=$(aws ec2 describe-subnets \
+        --filters "Name=vpc-id,Values=$VPC_ID" "Name=availability-zone,Values=$az" \
+        --query 'Subnets[0].SubnetId' --output text)
+    [ "$sn" != "None" ] && [ -n "$sn" ] || continue
+    SUBNET_ID="$sn"; AZ="$az"
+    echo "   trying $AZ ..."
+    if ! SERVER_ID=$(launch server 2>/dev/null); then
+        echo "   no capacity for $EGB_SERVER_INSTANCE_TYPE in $AZ"
+        SERVER_ID=""; continue
+    fi
+    if ! CLIENT_ID=$(launch client 2>/dev/null); then
+        echo "   no capacity for $EGB_CLIENT_INSTANCE_TYPE in $AZ, releasing the server"
+        aws ec2 terminate-instances --instance-ids "$SERVER_ID" >/dev/null 2>&1
+        SERVER_ID=""; CLIENT_ID=""; continue
+    fi
+    break
+done
+[ -n "$SERVER_ID" ] && [ -n "$CLIENT_ID" ] || {
+    echo "ERROR: could not launch both instance types in any AZ with a default subnet." >&2
+    echo "       Try different types via EGB_SERVER_INSTANCE_TYPE / EGB_CLIENT_INSTANCE_TYPE." >&2
+    exit 1; }
+echo "   server=$SERVER_ID client=$CLIENT_ID in $AZ"
 
 echo "== wait: running"
 aws ec2 wait instance-running --instance-ids "$SERVER_ID" "$CLIENT_ID"
