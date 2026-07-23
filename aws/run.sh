@@ -31,7 +31,7 @@ for eng in $ENGINES; do
     echo "-- server: bring up ONLY $eng (others stopped)"
     egb_ssh server "$R ./serve.sh up $eng"
     echo "-- client: load $ROWS rows into $eng over the network"
-    egb_ssh client "$R DB_HOST=$SERVER_PRIV ./client.sh load $eng $ROWS"
+    egb_ssh client "$R DB_HOST=$SERVER_PRIV QDB_PARQUET='${QDB_PARQUET:-0}' ./client.sh load $eng $ROWS"
     echo "-- client: measure $eng (readers=$READERS warmup=$WARMUP repeats=$REPEATS${VARIANTS:+ variants=$VARIANTS})"
     egb_ssh client "$R DB_HOST=$SERVER_PRIV WARMUP=$WARMUP REPEATS=$REPEATS VARIANTS='${VARIANTS:-}' RUN_TIMEOUT='${RUN_TIMEOUT:-}' ./client.sh measure $eng $ROWS $READERS"
 done

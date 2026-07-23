@@ -84,6 +84,7 @@ if [ "$STATE" = "fresh" ]; then
     ENVS="SERVER_PRIV=$SERVER_PRIV ROWS=$ROWS READERS=$READERS"
     ENVS="$ENVS VARIANTS='${VARIANTS:-}' WARMUP='${WARMUP:-2}' REPEATS='${REPEATS:-3}'"
     ENVS="$ENVS SETTLE='${SETTLE:-10}' RUN_TIMEOUT='${RUN_TIMEOUT:-3600}' SKIP_LOAD='${SKIP_LOAD:-0}'"
+    ENVS="$ENVS QDB_PARQUET='${QDB_PARQUET:-0}'"
     [ -n "${ENGINES:-}" ] && ENVS="$ENVS ENGINES='$ENGINES'"
     rssh "$CLIENT_PUB" "rm -f /tmp/campaign.log; nohup env $ENVS bash ${EGB_REMOTE_DIR}/aws/box_campaign.sh > /tmp/campaign.log 2>&1 & echo launched" >>"$LOG" 2>&1
     say "campaign launched detached on client"

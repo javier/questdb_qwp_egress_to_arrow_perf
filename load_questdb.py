@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import os
+import re
 import sys
 import time
 
@@ -45,6 +46,9 @@ def main(argv):
     ap.add_argument("--table", default="trades")
     ap.add_argument("--template", default=datagen.DEFAULT_TEMPLATE)
     ap.add_argument("--recreate", action="store_true", help="DROP and recreate the table first")
+    ap.add_argument("--parquet", action="store_true",
+                    help="create the table with FORMAT PARQUET so partitions are stored as "
+                         "compressed Parquet instead of QuestDB's native uncompressed columns")
     ap.add_argument("--token", default=None)
     ap.add_argument("--username", default=None)
     ap.add_argument("--password", default=None)
@@ -54,6 +58,13 @@ def main(argv):
 
     with open(os.path.join(HERE, "schema", "questdb.sql")) as fh:
         ddl = fh.read().replace("trades", args.table)
+    if args.parquet:
+        # Same schema, only the storage format changes, so the Parquet and native runs stay
+        # comparable row for row.
+        ddl, n = re.subn(r"PARTITION BY DAY WAL", "PARTITION BY DAY FORMAT PARQUET WAL", ddl)
+        if n != 1:
+            print(f"[ERROR]  could not inject FORMAT PARQUET into the DDL:\n{ddl}", file=sys.stderr)
+            return 1
 
     conf = build_conf(args)
     print(f"[load]   questdb {args.addr} table={args.table} rows={args.rows:,}")
@@ -96,6 +107,32 @@ def main(argv):
               f"({args.rows - actual:+,}). The load did not complete.", file=sys.stderr)
         return 1
     print(f"[verify] row count OK: {actual:,}")
+
+    # Partition storage. Worth printing for every run, not just Parquet ones: it is the
+    # only place the native/Parquet footprint comparison actually comes from.
+    with questdb.connect(conf) as db:
+        def partitions():
+            return db.query(
+                "select count() n, sum(diskSize) disk, sum(numRows) rows_, "
+                f"sum(case when isParquet then 0 else 1 end) pending "
+                f"from table_partitions('{args.table}')").to_polars()
+
+        if args.parquet:
+            # FORMAT PARQUET writes Parquet partitions directly out of the WAL, so there is
+            # nothing to wait for: by the time the row count is right, the partitions are
+            # already Parquet. This is only a guard that the DDL actually took effect.
+            pending = int(partitions()["pending"][0] or 0)
+            if pending:
+                print(f"[ERROR]  {pending} partition(s) are not Parquet - FORMAT PARQUET "
+                      f"did not take effect.", file=sys.stderr)
+                return 1
+            print("[verify] all partitions are Parquet")
+
+        p = partitions()
+        nparts, disk, prows = int(p["n"][0]), int(p["disk"][0] or 0), int(p["rows_"][0] or 0)
+        fmt = "parquet" if args.parquet else "native"
+        print(f"[size]   format={fmt} partitions={nparts} rows={prows:,} "
+              f"disk={disk:,} bytes ({disk / 1e9:.2f} GB, {disk / max(prows, 1):.2f} B/row)")
     return 0
 
 

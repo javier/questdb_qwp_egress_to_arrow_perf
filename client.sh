@@ -64,7 +64,13 @@ case "$cmd" in
     engine="${2:?engine: questdb | clickhouse | timescale}"
     rows="${3:?rows}"
     echo "==> loading $rows rows into '$engine' @ DB_HOST=$DB_HOST (drop + recreate)"
-    RUN "load_${engine}.py" --rows "$rows" --recreate
+    lflag=()
+    # QuestDB only: store partitions as Parquet instead of native columns. Spelled as an
+    # `if` rather than an && chain because `set -e` kills the script on a failing AND-list.
+    if [ "$engine" = "questdb" ] && [ "${QDB_PARQUET:-0}" = "1" ]; then
+        lflag=(--parquet)
+    fi
+    RUN "load_${engine}.py" --rows "$rows" --recreate "${lflag[@]}"
     ;;
   measure)
     engine="${2:?engine: questdb | clickhouse | timescale | all}"

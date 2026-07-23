@@ -74,7 +74,13 @@ for eng in $ENGINES; do
   wait_healthy "$cname"
 
   echo "--> Loading $ROWS rows into $eng (drop + recreate) ..."
-  RUN "load_${eng}.py" --rows "$ROWS" --recreate
+  LFLAG=()
+  # QuestDB only: store partitions as Parquet instead of native columns. Spelled as an
+  # `if` rather than an && chain because `set -e` kills the script on a failing AND-list.
+  if [ "$eng" = "questdb" ] && [ "${QDB_PARQUET:-0}" = "1" ]; then
+    LFLAG=(--parquet)
+  fi
+  RUN "load_${eng}.py" --rows "$ROWS" --recreate "${LFLAG[@]}"
 
   echo "--> Measuring $eng (readers=$READERS, warmup=$WARMUP, repeats=$REPEATS) ..."
   VFLAG=(); [ -n "${VARIANTS:-}" ] && VFLAG=(--variants "$VARIANTS")

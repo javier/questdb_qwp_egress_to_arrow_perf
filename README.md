@@ -215,6 +215,11 @@ and the timestamp slices prune cleanly. Schemas: `schema/{questdb,clickhouse,tim
 
   Timescale dominates — Postgres stores rows uncompressed. Size the volume with headroom for
   its WAL during a large COPY (~200 GB for a 500M campaign). `./teardown.sh` wipes all data.
+
+  The QuestDB figures above are its native format, which is uncompressed columnar. Creating
+  the table with `FORMAT PARQUET` instead stores partitions as Parquet from the first write,
+  so the table is compressed as it is ingested rather than only once older partitions get
+  converted to Parquet after the fact. Set `QDB_PARQUET=1` to load that way.
 - **Parallelism needs either volume or network RTT to pay off.** On localhost with a few
   million rows, per-connection setup dominates and more readers barely help (or slightly
   hurt). The multi-reader win is real when a single connection is round-trip bound - i.e.

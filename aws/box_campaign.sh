@@ -35,7 +35,7 @@ cd "$REPO" || { echo "NO_REPO $REPO"; exit 1; }
 for e in $ENGINES; do rm -f "results/run_${ROWS}_${e}.json"; done
 
 echo "campaign: rows=$ROWS readers=$READERS engines='$ENGINES' variants='${VARIANTS:-all}'"
-echo "          warmup=$WARMUP settle=${SETTLE}s repeats=$REPEATS run_timeout=$RUN_TIMEOUT skip_load=${SKIP_LOAD:-0}"
+echo "          warmup=$WARMUP settle=${SETTLE}s repeats=$REPEATS run_timeout=$RUN_TIMEOUT skip_load=${SKIP_LOAD:-0} qdb_parquet=${QDB_PARQUET:-0}"
 
 for eng in $ENGINES; do
     echo "==================== $eng ===================="
